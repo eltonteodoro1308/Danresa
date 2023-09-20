@@ -1,0 +1,610 @@
+#include 'totvs.ch'
+#include 'tlpp-core.th'
+#include 'fwmvcdef.ch'
+
+user function testenectarApiIntegrator( )
+
+	// local aParam := {'99','01','',''}
+	local aParam := {'01','0101','',''}
+
+return u_nectarApiIntegrator( aParam )
+
+user function nectarApiIntegrator( aParam )
+
+	local nTam   := len( aParam )
+	local cEmp   := aParam[ nTam - 3 ]
+	local cFil   := aParam[ nTam - 2 ]
+
+	varinfo('',aParam,,.F.,.T.)
+
+	if rpcSetEnv( cEmp, cFil )
+
+		private cUrl           := superGetMv( 'MX_URLNECT' )
+		private cToken         := superGetMv( 'MX_TOKNECT' )
+		private aOportunidades := jsonObject():new()
+
+		if LockByName( ProcName(), .T., .T.)
+
+			buscaOportunidades()
+
+			UnlockByName( ProcName(), .T., .T., .F.)
+
+		else
+
+			conOut('Rotina já está em execução: ' + cEmp + '/' + cFil)
+
+		end if
+
+	else
+
+		conOut('Não foi possível conectar na Empresa: ' + cEmp + '/' + cFil)
+
+	end if
+
+return
+
+static function buscaOportunidades()
+
+	local cUrlOportunidades := ''
+	local cJsonCampo        := '{"' + superGetMv( 'MX_CPONECT' ) + '":""}'
+	local nPagina           := 0
+	local cDataInicio       := ''
+
+	cDataInicio := Day2Str( superGetMv( 'MX_INICIO' ) ) + '/'
+	cDataInicio += Month2Str( superGetMv( 'MX_INICIO' ) ) + '/'
+	cDataInicio += Year2Str( superGetMv( 'MX_INICIO' ) )
+
+	private lPaginaVazia      := .F.
+
+	cUrlOportunidades := cUrl
+	cUrlOportunidades += 'oportunidades/'
+	cUrlOportunidades += '?api_token=' + cToken
+	cUrlOportunidades += '&status=2'
+	cUrlOportunidades += '&page=#1[1]#'
+	cUrlOportunidades += '&camposPersonalizados=' + codificaJson( cJsonCampo )
+	cUrlOportunidades += '&dataInicio=' + codificaJson( cDataInicio )
+	cUrlOportunidades += '&displayLength=' + cValToChar( superGetMv( 'MX_TAMPAG' ) )
+
+	while ! lPaginaVazia
+
+		fetch( I18N( cUrlOportunidades, { cValToChar( ++nPagina ) }), 'GET', /*cGETParms*/, /*cPOSTParms*/, /*nTimeOut*/, /*aHeadStr*/,;
+			{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+			gravaOportunidades( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+	end
+
+return
+
+static function gravaOportunidades( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local cId     := ''
+	local nX      := 1
+	local nY      := 1
+	local aArea   := getArea()
+	local cSeek   := ''
+	local lCliCmp := .T.
+	local oModel  := nil
+	local aErro   := {}
+
+	private jOportunidadeCamposPersonalizados := jsonObject():new()
+
+	if cHttpCode == '200'
+
+		ChkFile('ZZY')
+		aOportunidades:fromJson( DecodeUtf8( uResponse ) )
+
+		if len( aOportunidades ) == 0
+
+			lPaginaVazia := .T.
+
+		end if
+
+		for nx := 1 to len( aOportunidades )
+
+			DbSelectArea( 'ZZY' )
+			ZZY->( DbSetOrder( 2 ) ) // ZZY_FILIAL+ZZY_ID
+
+			cId := cValToChar( aOportunidades[ nX ]['id'] )
+
+			if ! ZZY->( msSeek( xFilial( 'ZZY' ) + cId ) )
+
+				// Verifica se contato já está cadastrado na base de Clientes pelo CNPJ
+				dbSelectArea( 'SA1' )
+				SA1->( dbSetOrder( 3 ) )
+
+				cSeek := xFilial( 'SA1' ) + alltrim( cValToChar( aOportunidades[ nX ]['cliente']['cnpj'] ) +;
+					cValToChar( aOportunidades[ nX ]['cliente']['cpf'] ) )
+
+				lCliCmp := SA1->( msSeek( cSeek ) .And. cSeek == A1_FILIAL + A1_CGC )
+
+				if ! lCliCmp
+
+					// Verifica se contato já está cadastrado na base de Clientes pelo ID Nectar
+					SA1->( DbOrderNickname( 'IDNECTAR' ) )
+
+					cSeek := xFilial( 'SA1' ) + cValToChar( aOportunidades[ nX ]['cliente']['id'] )
+
+					lCliCmp := SA1->( msSeek( cSeek ) .And. cSeek == A1_FILIAL + A1_XIDNECT )
+
+				end if
+
+				for nY := 1 to len( aOportunidades[ nX ]['produtos'] )
+
+					jOportunidadeCamposPersonalizados:fromJson( upper( aOportunidades[ nX ]['camposPersonalizados']:toJson() ) )
+
+					oModel := FWLoadModel( 'MODELZZY' )
+					oModel:SetOperation( MODEL_OPERATION_INSERT )
+
+					if oModel:Activate()
+
+						oModel:loadValue( 'MASTER', 'ZZY_FILIAL', xFilial( 'ZZY' ) )
+						oModel:loadValue( 'MASTER', 'ZZY_AUTOR' , aOportunidades[ nX ]['autor']['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_AUTATU', aOportunidades[ nX ]['autorAtualizacao']['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_CLIENT', cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_CONTAT', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_CODIGO', aOportunidades[ nX ]['codigo'] )
+						oModel:loadValue( 'MASTER', 'ZZY_XNPROJ', aOportunidades[ nX ]['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_CNPJ', aOportunidades[ nX ]['cliente']['cnpj'] )
+						oModel:loadValue( 'MASTER', 'ZZY_DTATUA', FwDateTimeToLocal( aOportunidades[ nX ]['dataAtualizacao'] + '-03:00', 0 )[ 1 ] )
+						oModel:loadValue( 'MASTER', 'ZZY_DTCRIA', FwDateTimeToLocal( aOportunidades[ nX ]['dataCriacao'] + '-03:00', 0 )[ 1 ] )
+						oModel:loadValue( 'MASTER', 'ZZY_DTLIM' , FwDateTimeToLocal( aOportunidades[ nX ]['dataLimite'] + '-03:00', 0 )[ 1 ] )
+						oModel:loadValue( 'MASTER', 'ZZY_ETAPA' , cValTochar( aOportunidades[ nX ]['etapa'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_ID'    , cValToChar( aOportunidades[ nX ]['id'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_PRORRO', .F. )
+						oModel:loadValue( 'MASTER', 'ZZY_JUSTIF', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_NOME'  , aOportunidades[ nX ]['cliente']['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_OBSERV', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_ORIGEM', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_PIPELI', aOportunidades[ nX ]['pipeline'] )
+						oModel:loadValue( 'MASTER', 'ZZY_FUNILV', aOportunidades[ nX ]['funilVenda']['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_PROBAB', cValTochar( aOportunidades[ nX ]['probabilidade'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_ITEM'  , strZero( nY, tamSx3('ZZY_ITEM')[1] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_PRODUT', aOportunidades[ nX ]['produtos'][nY]['codigo'] )
+						oModel:loadValue( 'MASTER', 'ZZY_QTDPRD', aOportunidades[ nX ]['produtos'][nY]['quantidade'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLUNPD', aOportunidades[ nX ]['produtos'][nY]['valorUnitario'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLTLPD', aOportunidades[ nX ]['produtos'][nY]['valorTotal'] )
+						oModel:loadValue( 'MASTER', 'ZZY_RESPON', aOportunidades[ nX ]['responsavel']['nome'] )
+						oModel:loadValue( 'MASTER', 'ZZY_STATUS', cValToChar( aOportunidades[ nX ]['status'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_TEMPER', aOportunidades[ nX ]['temperatura'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLRAVS', aOportunidades[ nX ]['valorAvulso'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLRMES', aOportunidades[ nX ]['valorMensal'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLRTOT', aOportunidades[ nX ]['valorTotal'] )
+						oModel:loadValue( 'MASTER', 'ZZY_VLTDSC', aOportunidades[ nX ]['valorTotalDescontos'] )
+						oModel:loadValue( 'MASTER', 'ZZY_COMPRO', aOportunidades[ nX ]['compromissos'] )
+						oModel:loadValue( 'MASTER', 'ZZY_TAREFA', aOportunidades[ nX ]['tarefas'] )
+						oModel:loadValue( 'MASTER', 'ZZY_BLQPRO', .F. )
+						oModel:loadValue( 'MASTER', 'ZZY_BLQCON', .F. )
+						oModel:loadValue( 'MASTER', 'ZZY_CORRES', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_EQCORR', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_MTDESC', '' )
+						oModel:loadValue( 'MASTER', 'ZZY_VNDBAS', .F. )
+						oModel:loadValue( 'MASTER', 'ZZY_PEDGER', .F. )
+						oModel:loadValue( 'MASTER', 'ZZY_CLICMP', lCliCmp )
+
+							// Verifica se já há amarrração do produto Protheus com produto Nectar
+							dbSelectArea( 'ZZZ' )
+							ZZZ->( dbSetOrder( 2 ) )
+
+							cSeek := xFilial( 'ZZZ' ) + cValToChar( aOportunidades[ nX ]['produtos'][nY]['codigo'] )
+
+							oModel:loadValue( 'MASTER', 'ZZY_PRDCMP', ZZZ->( msSeek( cSeek ) .And. cSeek == ZZZ_FILIAL + ALLTRIM( ZZZ_CDNECT ) ) )
+
+							oModel:loadValue( 'MASTER', 'ZZY_IDCLI', cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
+							oModel:loadValue( 'MASTER', 'ZZY_JSON', aOportunidades[ nX ]:toJson() )
+
+							If oModel:VldData()
+
+								oModel:CommitData()
+
+							else
+
+								aErro := oModel:GetErrorMessage()
+
+								conOut( "Id do formulário de origem:" + ' [' + cValToChar( aErro[1]  ) + ']' )
+								conOut( "Id do campo de origem:     " + ' [' + cValToChar( aErro[2]  ) + ']' )
+								conOut( "Id do formulário de erro:  " + ' [' + cValToChar( aErro[3]  ) + ']' )
+								conOut( "Id do campo de erro:       " + ' [' + cValToChar( aErro[4]  ) + ']' )
+								conOut( "Id do erro:                " + ' [' + cValToChar( aErro[5]  ) + ']' )
+								conOut( "Mensagem do erro:          " + ' [' + cValToChar( aErro[6]  ) + ']' )
+								conOut( "Mensagem da solução:       " + ' [' + cValToChar( aErro[7]  ) + ']' )
+								conOut( "Valor atribuido:           " + ' [' + cValToChar( aErro[8]  ) + ']' )
+								conOut( "Valor anterior:            " + ' [' + cValToChar( aErro[9]  ) + ']' )
+
+							EndIf
+
+						end if
+
+						oModel:DeActivate()
+
+						FreeObj( oModel )
+
+						buscaProduto( cValToChar( aOportunidades[ nX ]['produtos'][nY]['produto']['id'] ) )
+
+					next nY
+
+					buscaContato( cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
+
+					integraOportunidade( cValToChar( aOportunidades[ nX ]['id'] ) )
+
+				end if
+
+			next nX
+
+		else
+
+			conout( 'Não foi possível integrar com a API do Nectar CRM.' )
+
+			lPaginaVazia := .T.
+
+		end if
+
+		restArea( aArea )
+
+		return
+
+static function buscaContato( cId )
+
+	local cUrlContato := ''
+
+	cUrlContato := cUrl
+	cUrlContato += 'contatos/'+ cId
+	cUrlContato += '?api_token=' + cToken
+
+	fetch( cUrlContato, 'GET', /*cGETParms*/, /*cPOSTParms*/, /*nTimeOut*/, /*aHeadStr*/,;
+		{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+		gravaContato( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+return
+
+static function gravaContato( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local cId    := ''
+	local oModel := nil
+	local aErro  := {}
+	local jContato := jsonObject():new()
+
+	private jContatoCamposPersonalizados := jsonObject():new()
+
+	if cHttpCode == '200'
+
+		jContato:fromJson( DecodeUtf8( uResponse ) )
+
+		jContatoCamposPersonalizados:fromJson( upper( jContato['camposPersonalizados']:toJson() ) )
+
+		cId := cValToChar( jContato['id'] )
+
+		ChkFile('ZZX')
+		DbSelectArea( 'ZZX' )
+		ZZX->( DbSetOrder( 3 ) ) // ZZX_FILIAL+ZZX_ID
+
+		if ! ZZX->( msSeek( xFilial( 'ZZX' ) + cId ) )
+
+			oModel := FWLoadModel( 'MODELZZX' )
+			oModel:SetOperation( MODEL_OPERATION_INSERT )
+
+			if oModel:Activate()
+
+				oModel:loadValue( 'MASTER', 'ZZX_FILIAL', xFilial( 'ZZX' ) )
+				oModel:loadValue( 'MASTER', 'ZZX_ATIVO' , jContato['ativo'] )
+				oModel:loadValue( 'MASTER', 'ZZX_AUTOR' , jContato['autor']['nome'] )
+				oModel:loadValue( 'MASTER', 'ZZX_AUTATU', jContato['autorAtualizacao']['nome'] )
+				oModel:loadValue( 'MASTER', 'ZZX_CATEGO', cValToChar( jContato['categoria'] ) )
+				oModel:loadValue( 'MASTER', 'ZZX_CNPJ'  , cValToChar( jContato['cnpj'] ) )
+				oModel:loadValue( 'MASTER', 'ZZX_CODIGO', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_CPF'   , cValToChar( jContato['cpf'] ) )
+				oModel:loadValue( 'MASTER', 'ZZX_CONSTA', cValToChar( cValToChar( jContato['constante'] ) ) )
+				oModel:loadValue( 'MASTER', 'ZZX_CONTAT', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_CNTPAI', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_DATATU', FwDateTimeToLocal( jContato['dataAtualizacao'] + '-03:00', 0 )[ 1 ] )
+				oModel:loadValue( 'MASTER', 'ZZX_DTCRIA', FwDateTimeToLocal( jContato['dataCriacao'] + '-03:00', 0 )[ 1 ] )
+				if jContato:hasProperty('emails') .And. valType( jContato['emails'] ) == 'A';
+						.And. !empty( jContato['emails'] )
+
+					oModel:loadValue( 'MASTER', 'ZZX_EMAILS', jContato['emails'][1] )
+
+				else
+
+					oModel:loadValue( 'MASTER', 'ZZX_EMAILS', '' )
+
+				end if
+				oModel:loadValue( 'MASTER', 'ZZX_EMPRES', jContato['empresa'] )
+				oModel:loadValue( 'MASTER', 'ZZX_EMPATU', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_ENDERE', if(len(jContato['enderecos'])>0,jContato['enderecos'][1]:toJson(),'') )
+				oModel:loadValue( 'MASTER', 'ZZX_FACEBO', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_ID'    , cValToChar( jContato['id'] ) )
+				oModel:loadValue( 'MASTER', 'ZZX_INDPOR', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_LINKED', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_LISTA' , '' )
+				oModel:loadValue( 'MASTER', 'ZZX_LISTAS', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_NOME'  , jContato['nome'] )
+				oModel:loadValue( 'MASTER', 'ZZX_OBSERV', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_ORIGEM', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_RAZSOC', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_RECANU', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_RESPON', jContato['responsavel']['nome'] )
+				oModel:loadValue( 'MASTER', 'ZZX_SEGMEN', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_SIGILO', .F. )
+				oModel:loadValue( 'MASTER', 'ZZX_SITE'  , '' )
+				oModel:loadValue( 'MASTER', 'ZZX_SKYPE' , '' )
+				if jContato:hasProperty('telefone') .And. valType( jContato['telefone'] ) == 'C'
+
+					oModel:loadValue( 'MASTER', 'ZZX_TELEFO', jContato['telefone'] )
+
+				else
+
+					oModel:loadValue( 'MASTER', 'ZZX_TELEFO', '' )
+
+				end if
+
+				oModel:loadValue( 'MASTER', 'ZZX_TWITER', '' )
+				oModel:loadValue( 'MASTER', 'ZZX_COMPRO', jContato['compromissos'] )
+				oModel:loadValue( 'MASTER', 'ZZX_OPORTU', jContato['oportunidades'] )
+				oModel:loadValue( 'MASTER', 'ZZX_TAREFA', jContato['tarefas'] )
+				oModel:loadValue( 'MASTER', 'ZZX_RGPAIS', if( jContato:hasProperty('regiaoPais').and.;
+					valtype(jContato['regiaoPais'])!='U'.and.;
+					jContato['regiaoPais']:hasProperty('nome').and.;
+					valtype(jContato['regiaoPais']['nome'] )!='U',;
+					jContato['regiaoPais']['nome'],'' ) )
+				oModel:loadValue( 'MASTER', 'ZZX_RGESTD', if( jContato:hasProperty('regiaoEstado').and.;
+					valtype(jContato['regiaoEstado'])!='U'.and.;
+					jContato['regiaoEstado']:hasProperty('sigla').and.;
+					valtype(jContato['regiaoEstado']['sigla'] )!='U',;
+					jContato['regiaoEstado']['sigla'],'' ) )
+				oModel:loadValue( 'MASTER', 'ZZX_RGMUNC', if( jContato:hasProperty('regiaoMunicipio').and.;
+					valtype(jContato['regiaoMunicipio'])!='U'.and.;
+					jContato['regiaoMunicipio']:hasProperty('nome').and.;
+					valtype(jContato['regiaoMunicipio']['nome'] )!='U',;
+					jContato['regiaoMunicipio']['nome'],'' ) )
+				oModel:loadValue( 'MASTER', 'ZZX_JSON'  , jContato:toJson() )
+
+				If lRet := oModel:VldData()
+
+					lRet := oModel:CommitData()
+
+				else
+
+					aErro := oModel:GetErrorMessage()
+
+					conOut( "Id do formulário de origem:" + ' [' + cValToChar( aErro[1]  ) + ']' )
+					conOut( "Id do campo de origem:     " + ' [' + cValToChar( aErro[2]  ) + ']' )
+					conOut( "Id do formulário de erro:  " + ' [' + cValToChar( aErro[3]  ) + ']' )
+					conOut( "Id do campo de erro:       " + ' [' + cValToChar( aErro[4]  ) + ']' )
+					conOut( "Id do erro:                " + ' [' + cValToChar( aErro[5]  ) + ']' )
+					conOut( "Mensagem do erro:          " + ' [' + cValToChar( aErro[6]  ) + ']' )
+					conOut( "Mensagem da solução:       " + ' [' + cValToChar( aErro[7]  ) + ']' )
+					conOut( "Valor atribuido:           " + ' [' + cValToChar( aErro[8]  ) + ']' )
+					conOut( "Valor anterior:            " + ' [' + cValToChar( aErro[9]  ) + ']' )
+
+				end if
+
+			end if
+
+			oModel:DeActivate()
+			FreeObj( oModel )
+
+		end if
+
+	else
+
+		conout( 'Não foi possível integrar com a API do Nectar CRM.' )
+
+	end if
+
+return
+
+static function buscaProduto( cId )
+
+	local cUrlProduto := ''
+
+	cUrlProduto := cUrl
+	cUrlProduto += 'produto/'+ cId
+	cUrlProduto += '?api_token=' + cToken
+
+	fetch( cUrlProduto, 'GET', /*cGETParms*/, /*cPOSTParms*/, /*nTimeOut*/, /*aHeadStr*/,;
+		{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+		gravaProduto( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+return
+
+static function gravaProduto( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local cId    := ''
+	local oModel := nil
+	local aErro  := {}
+	local jProduto := jsonObject():new()
+
+	private jProdutoCamposPersonalizados := jsonObject():new()
+
+	if cHttpCode == '200'
+
+		jProduto:fromJson( DecodeUtf8( uResponse ) )
+
+		jProdutoCamposPersonalizados:fromJson( upper( jProduto['camposPersonalizados']:toJson() ) )
+
+		cId := cValToChar( jProduto['id'] )
+
+		ChkFile('ZZV')
+		DbSelectArea( 'ZZV' )
+		ZZV->( DbSetOrder( 2 ) ) // ZZV_FILIAL+ZZV_ID
+
+		if ! ZZV->( msSeek( xFilial( 'ZZV' ) + cId ) )
+
+			oModel := FWLoadModel( 'MODELZZV' )
+			oModel:SetOperation( MODEL_OPERATION_INSERT )
+
+			if oModel:Activate()
+
+				oModel:loadValue( 'MASTER', 'ZZV_FILIAL', xFilial( 'ZZV' ) )
+				oModel:loadValue( 'MASTER', 'ZZV_ATIVO' , jProduto['ativo'] )
+				oModel:loadValue( 'MASTER', 'ZZV_CATEGO', '' )
+				oModel:loadValue( 'MASTER', 'ZZV_CODIGO', jProduto['codigo'] )
+				oModel:loadValue( 'MASTER', 'ZZV_COMISS', jProduto['comissao'] )
+				oModel:loadValue( 'MASTER', 'ZZV_CONTAD', jProduto['contador'] )
+				oModel:loadValue( 'MASTER', 'ZZV_DSCMAX', jProduto['descontoMaximo'] )
+				oModel:loadValue( 'MASTER', 'ZZV_DESCRI', jProduto['nome'] )
+				oModel:loadValue( 'MASTER', 'ZZV_EDPRDP', ! empty( jProduto['editarProdutosDependentes'] ) )
+				oModel:loadValue( 'MASTER', 'ZZV_ID'    , cValToChar( jProduto['id'] ) )
+				oModel:loadValue( 'MASTER', 'ZZV_COMPRC', jProduto['comissaoPorcentual'] )
+				oModel:loadValue( 'MASTER', 'ZZV_DSCPRC', jProduto['descontoPorcentual'] )
+				oModel:loadValue( 'MASTER', 'ZZV_MOEDA' , jProduto['moeda'] )
+				oModel:loadValue( 'MASTER', 'ZZV_POSEST', ! empty( jProduto['possuiEstoque'] ) )
+				oModel:loadValue( 'MASTER', 'ZZV_PRDDEP', '' )
+				oModel:loadValue( 'MASTER', 'ZZV_QTDEST', 0 )
+				oModel:loadValue( 'MASTER', 'ZZV_RECORR', cValToChar( jProduto['recorrencia'] ) )
+				oModel:loadValue( 'MASTER', 'ZZV_SUBCAT', '' )
+				oModel:loadValue( 'MASTER', 'ZZV_VLRBAS', jProduto['valorBase'] )
+				oModel:loadValue( 'MASTER', 'ZZV_VLREDT', jProduto['valorEditavel'] )
+				oModel:loadValue( 'MASTER', 'ZZV_FRACIO', ! empty( jProduto['fracionario'] ) )
+				oModel:loadValue( 'MASTER', 'ZZV_ITCUST', '' )
+				oModel:loadValue( 'MASTER', 'ZZV_FXPREC', '' )
+				oModel:loadValue( 'MASTER', 'ZZV_VLBSCP', 0 )
+				oModel:loadValue( 'MASTER', 'ZZV_JSON'  , jProduto:toJson() )
+
+				If lRet := oModel:VldData()
+
+					lRet := oModel:CommitData()
+
+				else
+
+					aErro := oModel:GetErrorMessage()
+
+					conOut( "Id do formulário de origem:" + ' [' + cValToChar( aErro[1]  ) + ']' )
+					conOut( "Id do campo de origem:     " + ' [' + cValToChar( aErro[2]  ) + ']' )
+					conOut( "Id do formulário de erro:  " + ' [' + cValToChar( aErro[3]  ) + ']' )
+					conOut( "Id do campo de erro:       " + ' [' + cValToChar( aErro[4]  ) + ']' )
+					conOut( "Id do erro:                " + ' [' + cValToChar( aErro[5]  ) + ']' )
+					conOut( "Mensagem do erro:          " + ' [' + cValToChar( aErro[6]  ) + ']' )
+					conOut( "Mensagem da solução:       " + ' [' + cValToChar( aErro[7]  ) + ']' )
+					conOut( "Valor atribuido:           " + ' [' + cValToChar( aErro[8]  ) + ']' )
+					conOut( "Valor anterior:            " + ' [' + cValToChar( aErro[9]  ) + ']' )
+
+				end if
+
+			end if
+
+			oModel:DeActivate()
+			FreeObj( oModel )
+
+		end if
+
+	else
+
+		conout( 'Não foi possível integrar com a API do Nectar CRM.' )
+
+	end if
+
+return
+
+static function integraOportunidade( cId )
+
+	local cUrlOportunidades := ''
+	local jBody             := {"camposPersonalizados":jsonObject():new()}
+	local cPOSTParms        := ''
+
+	jBody["camposPersonalizados"][superGetMv( 'MX_CPONECT' )] := 'sim'
+
+	cPOSTParms := jBody:toJson()
+
+	cUrlOportunidades := cUrl
+	cUrlOportunidades += 'oportunidades/' + cId
+	cUrlOportunidades += '?api_token=' + cToken
+
+	fetch( cUrlOportunidades, 'PUT', /*cGETParms*/, /* cPOSTParms */ FWhttpEncode( cPOSTParms ), /*nTimeOut*/, /*aHeadStr*/{'Content-Type: application/json'},;
+		{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+		integraOportunidadeResultado( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+return
+
+static function integraOportunidadeResultado( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	if cHttpCode == '200'
+
+		conout( 'Oportunidade integrada com sucesso.' )
+
+	else
+
+		conout( 'Não foi possível integradar a Oportunidade.' )
+
+	end if
+
+return
+
+static function codificaJson( cJson )
+
+	local cRet  := ''
+	local nX    := 0
+	local cChar := ''
+
+	for nX := 1 to len( cJson )
+
+		cChar := subStr( cJson, nX, 1 )
+
+		if ( ( asc( cChar ) >= 048 .And. asc( cChar ) <= 057 ) .Or.;
+				( asc( cChar ) >= 065 .And. asc( cChar ) <= 090 ) .Or.;
+				( asc( cChar ) >= 097 .And. asc( cChar ) <= 122 ) )
+
+			cRet += cChar
+
+		else
+
+			cRet += '%' + upper(__DecToHex( asc( ( cChar ) ) ))
+
+		end if
+
+	next nX
+
+return cRet
+
+static function fetch( cUrl, cMethod, cGETParms, cPOSTParms, nTimeOut, aHeadStr, bProcess )
+
+	Local cHeaderRet   := ''
+	Local aHeaderRet   := {}
+	Local cProperty    := ''
+	Local cValue       := ''
+	Local nPos         := 0
+	Local cHttpCode    := ''
+	Local cContentType := ''
+	Local uResponse    := nil
+	Local uJsonXml     := nil
+	Local aAux         := {}
+	Local nX           := 0
+
+	uResponse  := HttpQuote ( cUrl, cMethod, cGETParms, cPOSTParms, nTimeOut, aHeadStr, @cHeaderRet )
+
+	aAux := StrTokArr2( StrTran( cHeaderRet, Chr(13), '' ), Chr(10), .T. )
+
+	cHttpCode := StrTokArr2( aAux[ 1 ], " ", .T. )[2]
+
+	for nX := 2 to len( aAux )
+
+		nPos := At( ":", aAux[ nX ] )
+
+		cProperty := SubString( aAux[ nX ], 1, nPos - 1 )
+		cValue    := SubString( aAux[ nX ], nPos + 2, Len( aAux[ nX ] )  )
+
+		aAdd( aHeaderRet, { cProperty, cValue } )
+
+		if cProperty == 'Content-Type'
+
+			cContentType := cValue
+
+		end if
+
+	next nX
+
+	if 'application/xml' $ Lower(cContentType) .Or.;
+			'application/xhtml+xml' $ Lower(cContentType)
+
+		uJsonXml := TXmlManager():New()
+
+		uJsonXml:Parse( uResponse )
+
+	elseif 'application/json' $ Lower(cContentType)
+
+		uJsonXml := JsonObject():New()
+
+		uJsonXml:FromJson( uResponse )
+
+	endif
+
+return Eval( bProcess, cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
