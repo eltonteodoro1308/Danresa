@@ -85,6 +85,9 @@ static function gravaOportunidades( cHeaderRet, uResponse, uJsonXml, cHttpCode, 
 	local lCliCmp := .T.
 	local oModel  := nil
 	local aErro   := {}
+	local cCodCli := ''
+	local cLojCli := ''
+	local cNomCli := ''
 
 	private jOportunidadeCamposPersonalizados := jsonObject():new()
 
@@ -125,6 +128,14 @@ static function gravaOportunidades( cHeaderRet, uResponse, uJsonXml, cHttpCode, 
 					cSeek := xFilial( 'SA1' ) + cValToChar( aOportunidades[ nX ]['cliente']['id'] )
 
 					lCliCmp := SA1->( msSeek( cSeek ) .And. cSeek == A1_FILIAL + A1_XIDNECT )
+
+				end if
+
+				if lCliCmp
+
+					cCodCli := SA1->A1_COD
+					cLojCli := SA1->A1_LOJA
+					cNomCli := SA1->A1_NOME
 
 				end if
 
@@ -180,67 +191,70 @@ static function gravaOportunidades( cHeaderRet, uResponse, uJsonXml, cHttpCode, 
 						oModel:loadValue( 'MASTER', 'ZZY_VNDBAS', .F. )
 						oModel:loadValue( 'MASTER', 'ZZY_PEDGER', .F. )
 						oModel:loadValue( 'MASTER', 'ZZY_CLICMP', lCliCmp )
+						oModel:loadValue( 'MASTER', 'ZZY_CDCLIP', cCodCli )
+						oModel:loadValue( 'MASTER', 'ZZY_LJCLIP', cLojCli )
+						oModel:loadValue( 'MASTER', 'ZZY_NMCLIP', cNomCli )
 
-							// Verifica se já há amarrração do produto Protheus com produto Nectar
-							dbSelectArea( 'ZZZ' )
-							ZZZ->( dbSetOrder( 2 ) )
+						// Verifica se já há amarrração do produto Protheus com produto Nectar
+						dbSelectArea( 'ZZZ' )
+						ZZZ->( dbSetOrder( 2 ) )
 
-							cSeek := xFilial( 'ZZZ' ) + cValToChar( aOportunidades[ nX ]['produtos'][nY]['codigo'] )
+						cSeek := xFilial( 'ZZZ' ) + cValToChar( aOportunidades[ nX ]['produtos'][nY]['codigo'] )
 
-							oModel:loadValue( 'MASTER', 'ZZY_PRDCMP', ZZZ->( msSeek( cSeek ) .And. cSeek == ZZZ_FILIAL + ALLTRIM( ZZZ_CDNECT ) ) )
+						oModel:loadValue( 'MASTER', 'ZZY_PRDCMP', ZZZ->( msSeek( cSeek ) .And. cSeek == ZZZ_FILIAL + ALLTRIM( ZZZ_CDNECT ) ) )
 
-							oModel:loadValue( 'MASTER', 'ZZY_IDCLI', cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
-							oModel:loadValue( 'MASTER', 'ZZY_JSON', aOportunidades[ nX ]:toJson() )
+						oModel:loadValue( 'MASTER', 'ZZY_IDCLI', cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
+						oModel:loadValue( 'MASTER', 'ZZY_JSON', aOportunidades[ nX ]:toJson() )
 
-							If oModel:VldData()
+						If oModel:VldData()
 
-								oModel:CommitData()
+							oModel:CommitData()
 
-							else
+						else
 
-								aErro := oModel:GetErrorMessage()
+							aErro := oModel:GetErrorMessage()
 
-								conOut( "Id do formulário de origem:" + ' [' + cValToChar( aErro[1]  ) + ']' )
-								conOut( "Id do campo de origem:     " + ' [' + cValToChar( aErro[2]  ) + ']' )
-								conOut( "Id do formulário de erro:  " + ' [' + cValToChar( aErro[3]  ) + ']' )
-								conOut( "Id do campo de erro:       " + ' [' + cValToChar( aErro[4]  ) + ']' )
-								conOut( "Id do erro:                " + ' [' + cValToChar( aErro[5]  ) + ']' )
-								conOut( "Mensagem do erro:          " + ' [' + cValToChar( aErro[6]  ) + ']' )
-								conOut( "Mensagem da solução:       " + ' [' + cValToChar( aErro[7]  ) + ']' )
-								conOut( "Valor atribuido:           " + ' [' + cValToChar( aErro[8]  ) + ']' )
-								conOut( "Valor anterior:            " + ' [' + cValToChar( aErro[9]  ) + ']' )
+							conOut( "Id do formulário de origem:" + ' [' + cValToChar( aErro[1]  ) + ']' )
+							conOut( "Id do campo de origem:     " + ' [' + cValToChar( aErro[2]  ) + ']' )
+							conOut( "Id do formulário de erro:  " + ' [' + cValToChar( aErro[3]  ) + ']' )
+							conOut( "Id do campo de erro:       " + ' [' + cValToChar( aErro[4]  ) + ']' )
+							conOut( "Id do erro:                " + ' [' + cValToChar( aErro[5]  ) + ']' )
+							conOut( "Mensagem do erro:          " + ' [' + cValToChar( aErro[6]  ) + ']' )
+							conOut( "Mensagem da solução:       " + ' [' + cValToChar( aErro[7]  ) + ']' )
+							conOut( "Valor atribuido:           " + ' [' + cValToChar( aErro[8]  ) + ']' )
+							conOut( "Valor anterior:            " + ' [' + cValToChar( aErro[9]  ) + ']' )
 
-							EndIf
+						EndIf
 
-						end if
+					end if
 
-						oModel:DeActivate()
+					oModel:DeActivate()
 
-						FreeObj( oModel )
+					FreeObj( oModel )
 
-						buscaProduto( cValToChar( aOportunidades[ nX ]['produtos'][nY]['produto']['id'] ) )
+					buscaProduto( cValToChar( aOportunidades[ nX ]['produtos'][nY]['produto']['id'] ) )
 
-					next nY
+				next nY
 
-					buscaContato( cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
+				buscaContato( cValToChar( aOportunidades[ nX ]['cliente']['id'] ) )
 
-					integraOportunidade( cValToChar( aOportunidades[ nX ]['id'] ) )
+				integraOportunidade( cValToChar( aOportunidades[ nX ]['id'] ) )
 
-				end if
+			end if
 
-			next nX
+		next nX
 
-		else
+	else
 
-			conout( 'Não foi possível integrar com a API do Nectar CRM.' )
+		conout( 'Não foi possível integrar com a API do Nectar CRM.' )
 
-			lPaginaVazia := .T.
+		lPaginaVazia := .T.
 
-		end if
+	end if
 
-		restArea( aArea )
+	restArea( aArea )
 
-		return
+return
 
 static function buscaContato( cId )
 

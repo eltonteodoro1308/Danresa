@@ -511,16 +511,18 @@ user function updatZZY()
 	local cValue   := ''
 
 	Private cCadastro := "Oportunidades"
+	Public lCliAlter  := .F.
 
 	if ZZY->ZZY_PEDGER
 
-		apMsgStop( 'Oportunidade com pedido já gerado.', 'Atenção !!!')
+		complement()
 
 	else
 
 		AxAltera( 'ZZY', ZZY->( RecNo() ), 4,,,,,;
-		/*cTudoOk*/ '( u_recCust(), .T. )', /*cTransact*/, /*cFunc*/,;
-		 /*aButtons*/ { { '', { || u_recCust() }, 'Recalcula Custeio' } } )
+		/*cTudoOk*/ '( u_recCust(), u_atuOpor(), .T. )', /*cTransact*/, /*cFunc*/,;
+		 /*aButtons*/ { { '', { || u_recCust() }, 'Recalcula Custeio' },;
+			{ '', { || u_altCli() }, 'Altera Cliente' } } )
 
 
 		cCommand := " UPDATE " + retSqlName( 'ZZY' ) + " SET "
@@ -569,6 +571,18 @@ user function updatZZY()
 
 return
 
+static function complement()
+
+	local aCampos := { 'ZZY_RESPON', 'ZZY_XNCONT', 'ZZY_DTATUA', 'ZZY_XOBSST', 'ZZY_XPROPO', 'ZZY_XSTATU',;
+		'ZZY_XFABRI', 'ZZY_XPREVE', 'ZZY_XDISTR', 'ZZY_XPEDCO', 'ZZY_XOVPD', 'ZZY_XOVSDV', 'NOUSER'  }
+
+	apMsgStop( 'Oportunidade com pedido já gerado,'+;
+		' só será permitido complementar a oportunidade.', 'Atenção !!!')
+
+	AxAltera( 'ZZY', ZZY->( RecNo() ), 4, aCampos, aCampos )
+
+return
+
 user function recCust()
 
 	local lReal := allTrim( M->ZZY_XMOEDV ) == 'R$'
@@ -579,6 +593,97 @@ user function recCust()
 	M->ZZY_XTOTCU := M->ZZY_XVLTOC + M->ZZY_XVLSME
 	M->ZZY_XMARKU := M->ZZY_VLRTOT / M->ZZY_XTOTCU
 	M->ZZY_XTOTMA := ( M->ZZY_VLRTOT - M->ZZY_XTOTCU ) - ( ( M->ZZY_VLRTOT - M->ZZY_XTOTCU ) * M->ZZY_XPIDIS)
+
+return
+
+user function altCli()
+
+	local cUrl        := superGetMv( 'MX_URLNECT' )
+	local cToken      := superGetMv( 'MX_TOKNECT' )
+	local cUrlContato := ''
+
+	If ConPad1(,,, 'SA1' )
+
+		if empty( SA1->A1_CGC )
+
+			cUrlContato := cUrl
+			cUrlContato += 'contatos/cnpj/'
+			cUrlContato += SA1->A1_CGC
+			cUrlContato += '?api_token=' + cToken
+
+			if fetch( cUrlContato, 'GET', /* cGETParms */, /* cPOSTParms */, /* nTimeOut */, /* aHeadStr */,;
+					{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+					altCli( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+				lCliAlter := .T.
+
+			end if
+
+		end if
+
+	EndIf
+
+return
+
+static function altCli( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local jContato := jsonObject():new()
+
+	if cHttpCode == '200'
+
+		jContato:fromJson( DecodeUtf8( uResponse ) )
+
+		M->ZZY_IDCLI  := jContato['id']
+		M->ZZY_CLIENT := jContato['id']
+		M->ZZY_CNPJ   := jContato['cnpj']
+		M->ZZY_NOME   := jContato['nome']
+		M->ZZY_CNPJ   := SA1->A1_CGC
+		M->ZZY_CDCLIP := SA1->A1_COD
+		M->ZZY_LJCLIP := SA1->A1_LOJA
+		M->ZZY_NMCLIP := SA1->A1_NOME
+
+	else
+
+		apMsgStop( 'Não foi possível buscar o cliente na base do nectar.', 'Atenção !!!' )
+
+		return .F.
+
+	end if
+
+return .T.
+
+user function atuOpor()
+
+	local cUrl        := superGetMv( 'MX_URLNECT' )
+	local cToken      := superGetMv( 'MX_TOKNECT' )
+	local cUrlOportun := ''
+	local cPOSTParms  := ''
+	local jPOSTParms  := jsonObject():new()
+
+	if lCliAlter
+
+		jPOSTParms['cliente'] := jsonObject():new()
+		jPOSTParms['id']      :=  M->ZZY_IDCLI
+
+		cPOSTParms := jPOSTParms:fromJson()
+
+		cUrlOportun := cUrl
+		cUrlOportun += 'oportunidades/'
+		cUrlOportun += M->ZZY_ID
+		cUrlOportun += '?api_token=' + cToken
+
+		if fetch( cUrlOportun, 'PUT', /* cGETParms */, /* cPOSTParms */FWhttpEncode( cPOSTParms ), /* nTimeOut */, /* aHeadStr */,;
+				{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | cHttpCode } ) == '200'
+
+			apMsgStop( 'Cliente da oportunidade alterado na base do nectar.', 'Atenção !!!' )
+
+		else
+
+			apMsgStop( 'Não foi possível alterar o cliente da oportunidade na base do nectar.', 'Atenção !!!' )
+
+		end if
+
+	end if
 
 return
 
@@ -646,7 +751,10 @@ static function cmpCliOpt()
 
 	// Marcar Oportunidade como cliente compatibilizado
 	cCommand := " UPDATE " + retSqlName( 'ZZY' )
-	cCommand += " SET ZZY_CLICMP = 'T' "
+	cCommand += " SET ZZY_CLICMP = 'T' ,"
+	cCommand += " SET ZZY_ZZY_CDCLIP = '" + SA1->A1_COD + "' ,"
+	cCommand += " SET ZZY_LJCLIP = '" + SA1->A1_LOJA + "' ,"
+	cCommand += " SET ZZY_NMCLIP = '" + SA1->A1_NOME + "' ,"
 	cCommand += " WHERE ZZY_IDCLI = '" + ZZX->ZZX_ID + "' "
 
 	if tcSqlExec(cCommand ) < 0
@@ -657,3 +765,57 @@ static function cmpCliOpt()
 	end if
 
 return
+
+static function fetch( cUrl, cMethod, cGETParms, cPOSTParms, nTimeOut, aHeadStr, bProcess )
+
+	Local cHeaderRet   := ''
+	Local aHeaderRet   := {}
+	Local cProperty    := ''
+	Local cValue       := ''
+	Local nPos         := 0
+	Local cHttpCode    := ''
+	Local cContentType := ''
+	Local uResponse    := nil
+	Local uJsonXml     := nil
+	Local aAux         := {}
+	Local nX           := 0
+
+	uResponse  := HttpQuote ( cUrl, cMethod, cGETParms, cPOSTParms, nTimeOut, aHeadStr, @cHeaderRet )
+
+	aAux := StrTokArr2( StrTran( cHeaderRet, Chr(13), '' ), Chr(10), .T. )
+
+	cHttpCode := StrTokArr2( aAux[ 1 ], " ", .T. )[2]
+
+	for nX := 2 to len( aAux )
+
+		nPos := At( ":", aAux[ nX ] )
+
+		cProperty := SubString( aAux[ nX ], 1, nPos - 1 )
+		cValue    := SubString( aAux[ nX ], nPos + 2, Len( aAux[ nX ] )  )
+
+		aAdd( aHeaderRet, { cProperty, cValue } )
+
+		if cProperty == 'Content-Type'
+
+			cContentType := cValue
+
+		end if
+
+	next nX
+
+	if 'application/xml' $ Lower(cContentType) .Or.;
+			'application/xhtml+xml' $ Lower(cContentType)
+
+		uJsonXml := TXmlManager():New()
+
+		uJsonXml:Parse( uResponse )
+
+	elseif 'application/json' $ Lower(cContentType)
+
+		uJsonXml := JsonObject():New()
+
+		uJsonXml:FromJson( uResponse )
+
+	endif
+
+return Eval( bProcess, cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
