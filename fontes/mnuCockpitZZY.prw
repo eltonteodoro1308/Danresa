@@ -524,7 +524,6 @@ user function updatZZY()
 		 /*aButtons*/ { { '', { || u_recCust() }, 'Recalcula Custeio' },;
 			{ '', { || u_altCli() }, 'Altera Cliente' } } )
 
-
 		cCommand := " UPDATE " + retSqlName( 'ZZY' ) + " SET "
 
 		for nX := 1 to len( aCampos )
@@ -598,43 +597,36 @@ return
 
 user function altCli()
 
-	local cUrl        := superGetMv( 'MX_URLNECT' )
-	local cToken      := superGetMv( 'MX_TOKNECT' )
-	local cUrlContato := ''
+	local jContato := nil
 
 	If ConPad1(,,, 'SA1' )
 
-		if empty( SA1->A1_CGC )
+		if ! empty( SA1->A1_XIDNECT )
 
-			cUrlContato := cUrl
-			cUrlContato += 'contatos/cnpj/'
-			cUrlContato += SA1->A1_CGC
-			cUrlContato += '?api_token=' + cToken
+			jContato := buscaCliente( SA1->A1_XIDNECT, 0 )
 
-			if fetch( cUrlContato, 'GET', /* cGETParms */, /* cPOSTParms */, /* nTimeOut */, /* aHeadStr */,;
-					{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
-					altCli( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+		elseif ! empty( SA1->A1_CGC )
 
-				lCliAlter := .T.
+			jContato := buscaCliente( SA1->A1_CGC, 1 )
 
-			end if
+		else
+
+			apMsgStop( 'Cliente não tem o CNPJ informado, integração com Nectar mnão foi possível.', 'Atenção !!!' )
+
+			return
 
 		end if
 
-	EndIf
+		if valType( jContato ) != 'J'
 
-return
+			apMsgStop( 'Cliente não localizado no Nectar', 'Atenção !!!' )
 
-static function altCli( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+			return
 
-	local jContato := jsonObject():new()
+		end if
 
-	if cHttpCode == '200'
-
-		jContato:fromJson( DecodeUtf8( uResponse ) )
-
-		M->ZZY_IDCLI  := jContato['id']
-		M->ZZY_CLIENT := jContato['id']
+		M->ZZY_IDCLI  := cValToChar( jContato['id'] )
+		M->ZZY_CLIENT := cValToChar( jContato['id'] )
 		M->ZZY_CNPJ   := jContato['cnpj']
 		M->ZZY_NOME   := jContato['nome']
 		M->ZZY_CNPJ   := SA1->A1_CGC
@@ -642,15 +634,92 @@ static function altCli( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType
 		M->ZZY_LJCLIP := SA1->A1_LOJA
 		M->ZZY_NMCLIP := SA1->A1_NOME
 
-	else
+		if empty( SA1->A1_XIDNECT )
 
-		apMsgStop( 'Não foi possível buscar o cliente na base do nectar.', 'Atenção !!!' )
+			reclock( 'SA1', .F. )
 
-		return .F.
+			SA1->A1_XIDNECT := cValToChar( jContato['id'] )
+
+			SA1->( msUnlock() )
+
+		end if
+
+		lCliAlter := .T.
 
 	end if
 
-return .T.
+return
+
+static function buscaCliente( cIdCnpj, nTipo )
+
+	local cUrl        := superGetMv( 'MX_URLNECT' )
+	local cToken      := superGetMv( 'MX_TOKNECT' )
+	local cUrlContato := ''
+	local jRet        := nil
+	local cId         := ''
+
+	if nTipo != 0
+
+		cUrlContato := cUrl
+		cUrlContato += 'contatos/cnpj/'
+		cUrlContato += cIdCnpj
+		cUrlContato += '?api_token=' + cToken
+
+		cId := fetch( cUrlContato, 'GET', /* cGETParms */, /* cPOSTParms */, /* nTimeOut */, /* aHeadStr */,;
+			{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+			buscaId( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+		if empty( cId )
+
+			return
+
+		end if
+
+	end if
+
+	cUrlContato := cUrl
+	cUrlContato += 'contatos/'
+	cUrlContato += cId
+	cUrlContato += '?api_token=' + cToken
+
+	jRet := fetch( cUrlContato, 'GET', /* cGETParms */, /* cPOSTParms */, /* nTimeOut */, /* aHeadStr */,;
+		{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | ;
+		buscaContato( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType ) } )
+
+return jRet
+
+static function buscaId( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local jContato := jsonObject():new()
+	local cRet     := ''
+
+	if cHttpCode == '200'
+
+		jContato:fromJson( DecodeUtf8( uResponse ) )
+
+		if len(jContato) > 0
+
+			cRet := cValToChar( jContato[1]['id'] )
+
+		end if
+
+	end if
+
+return cRet
+
+static function buscaContato( cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType )
+
+	local jRet
+
+	if cHttpCode == '200'
+
+		jRet := jsonObject():new()
+
+		jRet:fromJson( DecodeUtf8( uResponse ) )
+
+	end if
+
+return jRet[1]
 
 user function atuOpor()
 
@@ -662,17 +731,18 @@ user function atuOpor()
 
 	if lCliAlter
 
-		jPOSTParms['cliente'] := jsonObject():new()
-		jPOSTParms['id']      :=  M->ZZY_IDCLI
+		jPOSTParms['cliente']       := jsonObject():new()
+		jPOSTParms['cliente']['id'] :=  val( ZZY->ZZY_IDCLI )
 
-		cPOSTParms := jPOSTParms:fromJson()
+		cPOSTParms := jPOSTParms:toJson()
 
 		cUrlOportun := cUrl
 		cUrlOportun += 'oportunidades/'
-		cUrlOportun += M->ZZY_ID
+		cUrlOportun += allTrim( ZZY->ZZY_ID )
 		cUrlOportun += '?api_token=' + cToken
 
-		if fetch( cUrlOportun, 'PUT', /* cGETParms */, /* cPOSTParms */FWhttpEncode( cPOSTParms ), /* nTimeOut */, /* aHeadStr */,;
+		if fetch( cUrlOportun, 'PUT', /* cGETParms */, /* cPOSTParms */FWhttpEncode( cPOSTParms ),;
+		 /* nTimeOut */, /* aHeadStr */{'Content-Type: application/json'},;
 				{ | cHeaderRet, uResponse, uJsonXml, cHttpCode, cContentType | cHttpCode } ) == '200'
 
 			apMsgStop( 'Cliente da oportunidade alterado na base do nectar.', 'Atenção !!!' )
